@@ -1,0 +1,228 @@
+~~~
+= AC_ARG_WITHでオプションを省略するとき、しないとき
+
+== はじめに
+
+クリアコードの林です。今回はAutotools ((-Autotoolsに関しては ((<Autotools事始め|20130912>)) という過去記事もあるのでAutotoolsをまだよく知らない人は参考にしてみてください。-)) にまつわる、最近遭遇したAC_ARG_WITHの落し穴の事例を紹介します。
+
+== ことの始まり
+
+今回の記事を書くきっかけは、とあるアプリケーションのGStreamer 0.10/1.0対応をしていたときのことです。
+GStreamer 0.10に対応していたアプリケーションを1.0系にも対応させることになりましたが、GStreamerは0.10系と1.0系とではAPIがかなり変更されています。
+まだ0.10系を使いたいという需要もあったことから、0.10系と1.0系両方対応することになりました。
+
+そのアプリケーションでは、ビルドシステムとしてAutotools ((-Autotoolsを使用していると、./configure; make; make installでインストールまで行える。-)) を使用していました。
+そのため、configureのオプションでどちらのバージョンを使うか切り替えられるようにすることにしました。
+Autoconfには (({--with-foo-bar})) という形式でオプションを受けとることのできるマクロとして (({AC_ARG_WITH})) があるので、これを使うことにしました。
+
+== configureで実現しようとしていたこと
+
+(({configure}))スクリプトを実行するときに実現したかったことは次の通りです。
+
+* 明示的にGStreamer 0.10/1.0を指定してビルドすることができる
+* 特に指定していない場合、GStreamer 1.0があればそちらを使い、なければGStreamer 0.10を使ってビルドすることができる
+
+前者は (({--with-gstreamer-version})) というオプションを追加し、 (({--with-gstreamer-version=0.10})) であればGStreamer 0.10系を使い、
+(({--with-gstreamer-version=1.0})) であればGStreamer 1.0系を使う指定となるように (({AC_ARG_WITH})) を追加しました。
+
+  AC_ARG_WITH([gstreamer],
+              AS_HELP_STRING([--with-gstreamer-version=@<:@auto/1.0/0.10@:>@],
+                             [Gstreamer version (default: auto)]),
+              [with_gstreamer_version=auto])
+
+後者は (({--with-gstreamer-version})) の値を見て (({PKG_CHECK_EXISTS})) マクロでGStreamer 1.0の有無、GStreamer 0.10の有無を順にチェックするようにしました。
+
+  case "$with_gstreamer_version" in
+      "0.10")
+          GSTREAMER_REQUIRED=0.10.35
+          GST_MAJORMINOR=0.10
+          ;;
+      "1.0")
+          GSTREAMER_REQUIRED=1.0.0
+          GST_MAJORMINOR=1.0
+          ;;
+      *)
+          PKG_CHECK_EXISTS(gstreamer-1.0,
+                           [GSTREAMER_REQUIRED=1.0.0 GST_MAJORMINOR=1.0],
+                           [GSTREAMER_REQUIRED=0.10.36 GST_MAJORMINOR=0.10])
+         ;;
+  esac
+
+== AC_ARG_WITHの奇妙な挙動
+
+前述のように (({AC_ARG_WITH})) を追加した後で、警告がでることに気づきました。
+
+  % ./configure --with-gstreamer-version=0.10
+  configure: WARNING: unrecognized options: --with-gstreamer-version
+
+(({configure}))実行時にオプションが認識できていません。これは、 (({AC_ARG_WITH})) の第1引数の指定ミスでした。
+
+  % diff -u just-work/configure.ac right-thing/configure.ac
+  --- just-work/configure.ac        2014-09-11 16:39:34.392214521 +0900
+  +++ right-thing/configure.ac 2014-09-11 16:39:34.392214521 +0900
+  @@ -13,9 +13,10 @@
+   
+   # Checks for libraries.
+   
+  -AC_ARG_WITH([gstreamer],
+  +AC_ARG_WITH([gstreamer-version],
+               AS_HELP_STRING([--with-gstreamer-version=@<:@auto/1.0/0.10@:>@],
+                              [Gstreamer version (default: auto)]),
+
+ただ、奇妙な挙動を示していることに気づきました。
+オプション指定が間違っているのに、明示的に指定した0.10を使えています。
+
+明示的に0.10を指定した場合、次のようになりました。
+
+  % ./configure --with-gstreamer-version=0.10
+  configure: WARNING: unrecognized options: --with-gstreamer-version
+  checking for a BSD-compatible install... /usr/bin/install -c
+  checking whether build environment is sane... yes
+  checking for a thread-safe mkdir -p... /bin/mkdir -p
+  checking for gawk... gawk
+  checking whether make sets $(MAKE)... yes
+  checking whether make supports nested variables... yes
+  checking for gcc... gcc
+  checking whether the C compiler works... yes
+  checking for C compiler default output file name... a.out
+  checking for suffix of executables... 
+  checking whether we are cross compiling... no
+  checking for suffix of object files... o
+  checking whether we are using the GNU C compiler... yes
+  checking whether gcc accepts -g... yes
+  checking for gcc option to accept ISO C89... none needed
+  checking whether gcc understands -c and -o together... yes
+  checking for style of include used by make... GNU
+  checking dependency style of gcc... gcc3
+  0.10
+  checking for GST... yes
+  checking that generated files are newer than configure... done
+  configure: creating ./config.status
+  config.status: creating Makefile
+  config.status: creating config.h
+  config.status: config.h is unchanged
+  config.status: executing depfiles commands
+  configure: WARNING: unrecognized options: --with-gstreamer-version
+  GStreamer: 0.10.36
+  
+明示的に1.0を指定した場合、次のようになりました。
+
+  % ./configure --with-gstreamer-version=1.0
+  configure: WARNING: unrecognized options: --with-gstreamer-version
+  checking for a BSD-compatible install... /usr/bin/install -c
+  checking whether build environment is sane... yes
+  checking for a thread-safe mkdir -p... /bin/mkdir -p
+  checking for gawk... gawk
+  checking whether make sets $(MAKE)... yes
+  checking whether make supports nested variables... yes
+  checking for gcc... gcc
+  checking whether the C compiler works... yes
+  checking for C compiler default output file name... a.out
+  checking for suffix of executables... 
+  checking whether we are cross compiling... no
+  checking for suffix of object files... o
+  checking whether we are using the GNU C compiler... yes
+  checking whether gcc accepts -g... yes
+  checking for gcc option to accept ISO C89... none needed
+  checking whether gcc understands -c and -o together... yes
+  checking for style of include used by make... GNU
+  checking dependency style of gcc... gcc3
+  1.0
+  checking for GST... yes
+  checking that generated files are newer than configure... done
+  configure: creating ./config.status
+  config.status: creating Makefile
+  config.status: creating config.h
+  config.status: config.h is unchanged
+  config.status: executing depfiles commands
+  configure: WARNING: unrecognized options: --with-gstreamer-version
+  GStreamer: 1.2.4
+  
+(({AC_ARG_WITH})) の定義が間違っているので、元々意図していた (({--with-gstreamer-version=})) が機能しないように思えますが、実際にはうまく動いています。
+どういうことでしょうか。
+
+== AC_ARG_WITHとフォールバック
+
+((<AC_ARG_WITH()のドキュメント|URL:http://www.gnu.org/savannah-checkouts/gnu/autoconf/manual/autoconf-2.69/html_node/External-Software.html#index-AC_005fARG_005fWITH-1940>)) のシグネチャは次の通りです。
+
+  Macro: AC_ARG_WITH (package, help-string, [action-if-given], [action-if-not-given])
+
+間違っていた定義では、 (({package})) が (({gstreamer-version})) ではなく (({gstreamer})) なので (({--with-gstreamer-version})) は (({unrecognized option})) 扱いになっています。
+そのため、以下の警告が出ていました。
+
+  configure: WARNING: unrecognized options: --with-gstreamer-version
+
+このとき、Autoconfはフォールバックとして (({with_gstreamer_versionに})) 指定した値をいれます。
+
+そこで、以下のようにAC_ARG_WITHそのものを削除してみました。
+
+  % diff -u just-work/configure.ac fallback/configure.ac
+  --- just-work/configure.ac      2014-09-11 16:39:34.392214521 +0900
+  +++ fallback/configure.ac       2014-09-11 16:39:34.392214521 +0900
+  @@ -13,10 +13,6 @@
+   
+   # Checks for libraries.
+   
+  -AC_ARG_WITH([gstreamer],
+  -            AS_HELP_STRING([--with-gstreamer-version=@<:@auto/1.0/0.10@:>@],
+  -                           [Gstreamer version (default: auto)]),
+  -            [with_gstreamer_version=auto])
+   echo $with_gstreamer_version
+  
+結果からいうと上記の (({AC_ARG_WITH})) を削除しても挙動がまったく一緒でした。
+つまり、Autoconfがフォールバックとして (({$with_gstreamer_version})) に指定した値を設定してくれているため、たまたまうまく動作していたのです。
+
+== (({AC_ARG_WITH})) の正しい指定
+
+まずは、 (({AC_ARG_WITH}))の第1引数である (({package})) を (({gstreamer})) ではなく、 (({gstreamer-version})) にします。
+
+  AC_ARG_WITH([gstreamer-version],
+              AS_HELP_STRING([--with-gstreamer-version=@<:@auto/1.0/0.10@:>@],
+                             [Gstreamer version (default: auto)]),
+              [with_gstreamer_version=auto])
+
+次に (({[with_gstreamer_version=auto]})) は、何も指定していなかったら(({auto}))にするためのもの ((-autoだったらcase文で分岐してPKG_CHECK_EXISTSで再度チェックするようにした部分が実行される。-)) なので、 (({action-if-not-given})) に対応していないといけません。
+(({action-if-not-given})) は第4引数として指定することになっています。
+よく見てみましょう。「(({,}))」 不足で第4引数ではなく、第3引数になってしまっていますね。
+
+したがって、正しい定義は次の通りです。
+
+  AC_ARG_WITH([gstreamer-version],
+              AS_HELP_STRING([--with-gstreamer-version=@<:@auto/1.0/0.10@:>@],
+                             [Gstreamer version (default: auto)]),,
+              [with_gstreamer_version=auto])
+
+でも、(({,,})) で第3引数が省略されているのはとてもわかりにくいですね。明示的に書くことにしましょう。
+最終的な定義はこうなりました。
+
+  AC_ARG_WITH([gstreamer-version],
+              AS_HELP_STRING([--with-gstreamer-version=@<:@auto/1.0/0.10@:>@],
+                             [Gstreamer version (default: auto)]),
+              [with_gstreamer_version=$withval],
+              [with_gstreamer_version=auto])
+
+== まとめ
+
+今回はAutotoolsの (({AC_ARG_WITH})) マクロでオプションを省略するとき、しないときの挙動にまつわる事例を紹介しました。
+必要最小限の記述をするために、省略可能な引数であれば省略するというのは正しいやりかたです。ただし、きちんと仕様を把握していないと意図しない挙動にめんくらうことにもなります。
+
+もし意図しない挙動に遭遇したら、まずは公式のドキュメントを参照してみましょう。うっかり勘違いして使っていないか確認できます。
+途中に出ているログも注意深く見ておきましょう。今回のように明らかな警告がでているかもしれません。
+
+GitHubに今回使用した ((<サンプルのリポジトリ|URL:https://github.com/kenhys/ac-arg-with-sample.git>)) を置いてあるので、git cloneして手元でも動かして試すことができます。
+
+  git clone https://github.com/kenhys/ac-arg-with-sample.git
+
+上記のリポジトリには以下の3つのサンプルが含まれています。
+
+* fallback (({AC_ARG_WITH})) を削除したバージョン  
+* just-work 今回の記事のきっかけとなった奇妙な挙動を示すバージョン
+* right-thing 修正済みの (({AC_ARG_WITH})) バージョン
+
+動作を試すには、それぞれのディレクトリに移動した後、最初に (({../autogen.sh})) 、 次に (({./configure})) を実行してみてください。
+
+  % ../autogen.sh
+  % configure --with-gstreamer-version=0.10
+  % configure --with-gstreamer-version=1.0
+
+~~~
