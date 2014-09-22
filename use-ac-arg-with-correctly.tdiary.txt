@@ -152,7 +152,7 @@ Autoconfには (({--with-foo-bar})) という形式でオプションを受け�
 
   configure: WARNING: unrecognized options: --with-gstreamer-version
 
-このとき、Autoconfはフォールバックとして (({with_gstreamer_versionに})) 指定した値をいれます。
+このとき、Autoconfはフォールバックとして (({with_gstreamer_version})) に指定した値をいれます。
 
 そこで、以下のようにAC_ARG_WITHそのものを削除してみました。
 
